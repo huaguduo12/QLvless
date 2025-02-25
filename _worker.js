@@ -3,10 +3,10 @@
 
 import { connect } from 'cloudflare:sockets';
 
-const userID = 'd51ac585-01f9-4e72-b4c5-5bd7b20979de';
+const userID = 'e7374e5e-b9ce-4d54-9498-7eed06208061';
 
 const bestIP = "bestcf.030101.xyz"; // 空字符串表示未设置
-const proxyIPs = ["bestproxy.030101.xyz"];
+const proxyIPs = ["45.77.130.245"];
 
 const proxyIP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
 
