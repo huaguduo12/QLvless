@@ -3,28 +3,76 @@
 
 import { connect } from 'cloudflare:sockets';
 
-const userID = 'e7374e5e-b9ce-4d54-9498-7eed06208061';
+// 缓存 KV 数据
+let cachedUserID = null;
+let cachedProxyIP = null;
+let lastFetchTime = 0;
+const CACHE_TTL = 86400000; // 24小时缓存，因为配置不常改变
 
-const bestIP = "bestcf.030101.xyz"; // 空字符串表示未设置
-const proxyIPs = ["45.77.130.245"];
+// 从KV获取并直接替换默认值
+async function initConfig(env) {
+	const now = Date.now();
+	
+	// 使用缓存数据如果未过期
+	if (cachedUserID && cachedProxyIP && (now - lastFetchTime) < CACHE_TTL) {
+		return;
+	}
 
-const proxyIP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
-
-if (!isValidUUID(userID)) {
-	throw new Error('The uuid is not set');
+	try {
+		// 直接使用 UUID 和 PROXYIP 作为 key
+		const uuid = await env.yumi.get('UUID');
+		const proxyip = await env.yumi.get('PROXYIP');
+		
+		console.log('KV values:', { uuid, proxyip }); // 添加日志
+		
+		if (uuid) cachedUserID = uuid;
+		if (proxyip) cachedProxyIP = proxyip;
+		lastFetchTime = now;
+		
+		console.log('Cached values:', { cachedUserID, cachedProxyIP }); // 添加日志
+	} catch (err) {
+		console.error('Failed to fetch KV:', err);
+	}
 }
 
-// 将 main 移到全局作用域
-let main = bestIP || proxyIP;
+// 获取当前配置
+function getCurrentConfig() {
+	const userID = cachedUserID || 'cd0b5f83-3729-4962-92fb-90045fb2533f';
+	const bestIP = "bestcf.030101.xyz"; // 空字符串表示未设置
+	const proxyIP = cachedProxyIP || "bpb.yousef.isegaro.com";
+
+	console.log('Current config:', { userID, bestIP, proxyIP }); // 添加日志
+
+	if (!isValidUUID(userID)) {
+		throw new Error('The uuid is not set');
+	}
+
+	const config = {
+		userID,
+		bestIP,
+		proxyIP,
+		main: bestIP || proxyIP
+	};
+	
+	console.log('Final config:', config); // 添加日志
+	
+	return config;
+}
 
 export default {
 	async fetch(request, env, ctx) {
 		try {
+			// 初始化配置
+			await initConfig(env);
+			
+			// 获取当前配置
+			const config = getCurrentConfig();
+			
 			const upgradeHeader = request.headers.get('Upgrade');
 			const url = new URL(request.url);
 
 			if (url.pathname === '/sub') {
-				const allLinks = generateAllLinks(url.host);
+				const allLinks = generateAllLinks(url.host, config);
 				const base64Links = btoa(allLinks.join('\n'));
 				return new Response(base64Links, {
 					status: 200,
@@ -37,7 +85,7 @@ export default {
 			if (!upgradeHeader || upgradeHeader !== 'websocket') {
 				switch (url.pathname) {
 					case '/':
-						const responseText = generateResponseText(request.cf, url.host);
+						const responseText = generateResponseText(request.cf, url.host, config);
 						return new Response(responseText, {
 							status: 200,
 							headers: {
@@ -50,16 +98,22 @@ export default {
 						});
 				}
 			} else {
-				return await ymyuuuOverWSHandler(request);
+				return await ymyuuuOverWSHandler(request, config);
 			}
 		} catch (err) {
-			let e = err;
-			return new Response(e.toString());
+			console.error(`Error handling request: ${err.stack || err}`);
+			return new Response(`Internal Server Error: ${err.message}`, {
+				status: 500,
+				headers: {
+					'Content-Type': 'text/plain;charset=utf-8'
+				}
+			});
 		}
 	},
 };
 
-function generateResponseText(cf, host) {
+function generateResponseText(cf, host, config) {
+	const { userID, bestIP, proxyIP } = config;
 	// 获取请求中的 Cloudflare 特定数据
 	const cloudflareData = JSON.stringify(cf, null, 2);
 	const additionalData = `GitHub: https://github.com/ymyuuu\nTelegram: https://t.me/HeroCore\n\nHost: ${host}${bestIP ? '\nBestIP: ' + bestIP : ''}\nProxyIP: ${proxyIP}\nUUID: ${userID}`;
@@ -67,33 +121,36 @@ function generateResponseText(cf, host) {
 
 	const isWorkersDev = host.endsWith('workers.dev');
 	if (isWorkersDev) {
-		const httpLinks = generateLinks(host, [80, 8080, 8880, 2052, 2086, 2095], 'none', 'none');
+		const httpLinks = generateLinks(host, [80, 8080, 8880, 2052, 2086, 2095], 'none', 'none', false, config);
 		responseText += `\n\nHTTP Port: 80, 8080, 8880, 2052, 2086, 2095\n${httpLinks.join('\n')}`;
 	} else {
-		const httpsLinks = generateLinks(host, [443, 8443, 2053, 2096, 2087, 2083], 'none', 'tls', true);
+		const httpsLinks = generateLinks(host, [443, 8443, 2053, 2096, 2087, 2083], 'none', 'tls', true, config);
 		responseText += `\n\nHTTPS Port: 443, 8443, 2053, 2096, 2087, 2083\n${httpsLinks.join('\n')}`;
 	}
 
 	return responseText;
 }
 
-function generateLinks(host, ports, encryption, security, isHTTPS = false) {
-    const protocol = "dmxlc3M="; // Base64 编码后的字符串 "dmxlc3M="
-	return ports.map(port =>
-		`${atob(protocol)}://${userID}@${main}:${port}?encryption=${encryption}&security=${security}${isHTTPS ? `&sni=${host}` : ''}&fp=random&type=ws&host=${host}&path=%2F%3D2048#CFW_${port}`
+function generateLinks(host, ports, encryption, security, isHTTPS = false, config) {
+	const { userID, main } = config;
+	const protocol = "dmxlc3M="; // Base64 编码后的 "vless"
+	const baseConfig = `${atob(protocol)}://${userID}@${main}`;
+	return ports.map(port => 
+		`${baseConfig}:${port}?encryption=${encryption}&security=${security}${isHTTPS ? `&sni=${host}` : ''}&fp=random&type=ws&host=${host}&path=%2F%3D2048#CFW_${port}`
 	);
 }
 
-function generateAllLinks(host) {
+function generateAllLinks(host, config) {
 	const isWorkersDev = host.endsWith('workers.dev');
 	if (isWorkersDev) {
-		return generateLinks(host, [80, 8080, 8880, 2052, 2086, 2095], 'none', 'none');
+		return generateLinks(host, [80, 8080, 8880, 2052, 2086, 2095], 'none', 'none', false, config);
 	} else {
-		return generateLinks(host, [443, 8443, 2053, 2096, 2087, 2083], 'none', 'tls', true);
+		return generateLinks(host, [443, 8443, 2053, 2096, 2087, 2083], 'none', 'tls', true, config);
 	}
 }
 
-async function ymyuuuOverWSHandler(request) {
+async function ymyuuuOverWSHandler(request, config) {
+	const { userID, bestIP, proxyIP, main } = config;
 
 	const webSocketPair = new WebSocketPair();
 	const [client, webSocket] = Object.values(webSocketPair);
@@ -166,7 +223,7 @@ async function ymyuuuOverWSHandler(request) {
 				return;
 			}
 			handleTCPOutBound(remoteSocketWapper, addressRemote, portRemote, rawClientData,
-				webSocket, ymyuuuResponseHeader, log);
+				webSocket, ymyuuuResponseHeader, log, config);
 		},
 		close() {
 			log(`readableWebSocketStream is close`);
@@ -186,29 +243,54 @@ async function ymyuuuOverWSHandler(request) {
 
 
 async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, ymyuuuResponseHeader,
-	log, ) {
+	log, config) {
 
 	async function connectAndWrite(address, port) {
-		const tcpSocket = connect({
-			hostname: address,
-			port: port,
-		});
-		remoteSocket.value = tcpSocket;
-		log(`connected to ${address}:${port}`);
-		const writer = tcpSocket.writable.getWriter();
-		await writer.write(rawClientData);
-		writer.releaseLock();
-		return tcpSocket;
+		try {
+			const tcpSocket = connect({
+				hostname: address,
+				port: port,
+				timeout: 10000,  // 增加超时时间
+				allowHalfOpen: false,  // 关闭半开连接，减少资源占用
+				keepAlive: false,  // 关闭 keepAlive，让 CF 自己管理连接
+			});
+			remoteSocket.value = tcpSocket;
+			log(`connected to ${address}:${port}`);
+			const writer = tcpSocket.writable.getWriter();
+			await writer.write(rawClientData);
+			writer.releaseLock();
+			return tcpSocket;
+		} catch (error) {
+			log(`Failed to connect to ${address}:${port}: ${error}`);
+			throw error;
+		}
 	}
 
 	async function retry() {
-		const tcpSocket = await connectAndWrite(proxyIP || addressRemote, portRemote)
-		tcpSocket.closed.catch(( /** @type {any} */ error) => {
-			console.log('retry tcpSocket closed error', error);
-		}).finally(() => {
-			safeCloseWebSocket(webSocket);
-		})
-		remoteSocketToWS(tcpSocket, webSocket, ymyuuuResponseHeader, null, log);
+		const maxRetries = 3;
+		let retryCount = 0;
+		
+		while (retryCount < maxRetries) {
+			try {
+				const tcpSocket = await connectAndWrite(config.proxyIP, portRemote);
+				tcpSocket.closed.catch((error) => {
+					console.log('retry tcpSocket closed error', error);
+				}).finally(() => {
+					safeCloseWebSocket(webSocket);
+				})
+				remoteSocketToWS(tcpSocket, webSocket, ymyuuuResponseHeader, null, log);
+				return;
+			} catch (error) {
+				retryCount++;
+				if (retryCount === maxRetries) {
+					// 所有重试失败，使用直连
+					const tcpSocket = await connectAndWrite(addressRemote, portRemote);
+					remoteSocketToWS(tcpSocket, webSocket, ymyuuuResponseHeader, null, log);
+				}
+				// 短暂延迟后重试
+				await new Promise(resolve => setTimeout(resolve, 1000));
+			}
+		}
 	}
 
 	const tcpSocket = await connectAndWrite(addressRemote, portRemote);
