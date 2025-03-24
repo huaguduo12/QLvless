@@ -1,8 +1,8 @@
 # Workers-Vless
 
 轻量级版本，对抗1.0
-输入/sub出节点
-绑定yumi=KV空间可改UUID,PROXYIP
+
+# 绑定yumi=KV空间可改UUID,PROXYIP
 
 - 群聊: [HeroCore](https://t.me/HeroCore)
 - 频道: [HeroMsg](https://t.me/HeroMsg)
